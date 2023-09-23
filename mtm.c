@@ -29,10 +29,28 @@
 #include <wchar.h>
 #include <wctype.h>
 
+#include <sys/prctl.h>
+
 #include "vtparser.h"
 
 /*** CONFIGURATION */
 #include "config.h"
+
+/*
+for old pos:
+  blinkificate(false)
+for new pos:
+  blinkificate(true)
+
+blinkificate
+  blink = 0
+  if blink != blinknew
+    invert
+  blinknew = blink
+*/
+
+#define LINES 42
+#define COLS 56
 
 #define MIN(x, y) ((x) < (y)? (x) : (y))
 #define MAX(x, y) ((x) > (y)? (x) : (y))
@@ -68,10 +86,17 @@ struct NODE{
 };
 
 /*** GLOBALS AND PROTOTYPES */
-static NODE *root, *focused, *lastfocused = NULL;
+static NODE *root, *lastfocused = NULL;
+NODE *scrns[8];
+NODE *focused = NULL;
 static int commandkey = CTL(COMMAND_KEY), nfds = 1; /* stdin */
 static fd_set fds;
 static char iobuf[BUFSIZ];
+
+void* foos[8];
+void* foop;
+static short glob_bg = 0;
+extern FILE *fp;
 
 static void setupevents(NODE *n);
 static void reshape(NODE *n, int y, int x, int h, int w);
@@ -94,7 +119,7 @@ quit(int rc, const char *m) /* Shut down MTM. */
     exit(rc);
 }
 
-static void
+void
 safewrite(int fd, const char *b, size_t n) /* Write, checking for errors. */
 {
     size_t w = 0;
@@ -106,6 +131,21 @@ safewrite(int fd, const char *b, size_t n) /* Write, checking for errors. */
             s = 0;
         w += (size_t)s;
     }
+}
+
+extern bool composing;
+extern bool link_buffer;
+
+void* cs(NODE* n) {
+  // if on primary
+  if (n == scrns[0]) {
+    // when on primary and not composing shortcut
+    //   need for composition by directly rendering to
+    //   the served screen.
+    return !(composing || link_buffer) ? foop : foos[0];
+  } else {
+    return foos[1];
+  }
 }
 
 static const char *
@@ -151,6 +191,7 @@ getshell(void) /* Get the user's preferred shell. */
 #define COMMONVARS                                                      \
     NODE *n = (NODE *)p;                                                \
     SCRN *s = n->s;                                                     \
+    void *foo = cs(n);                                                  \
     WINDOW *win = s->win;                                               \
     int py, px, y, x, my, mx, top = 0, bot = 0, tos = s->tos;           \
     (void)v; (void)p; (void)w; (void)iw; (void)argc; (void)argv;        \
@@ -187,6 +228,8 @@ HANDLER(cup) /* CUP - Cursor Position */
 ENDHANDLER
 
 HANDLER(dch) /* DCH - Delete Character */
+    fprintf(fp, "DCH\n");
+    fflush(fp);
     for (int i = 0; i < P1(0); i++)
         wdelch(win);
 ENDHANDLER
@@ -197,14 +240,20 @@ HANDLER(ich) /* ICH - Insert Character */
 ENDHANDLER
 
 HANDLER(cuu) /* CUU - Cursor Up */
+    fprintf(fp, "CUU\n");
+    fflush(fp);
     wmove(win, MAX(py - P1(0), tos + top), x);
 ENDHANDLER
 
 HANDLER(cud) /* CUD - Cursor Down */
+    fprintf(fp, "CUD\n");
+    fflush(fp);
     wmove(win, MIN(py + P1(0), tos + bot - 1), x);
 ENDHANDLER
 
 HANDLER(cuf) /* CUF - Cursor Forward */
+    fprintf(fp, "CUF\n");
+    fflush(fp);
     wmove(win, py, MIN(x + P1(0), mx - 1));
 ENDHANDLER
 
@@ -282,6 +331,8 @@ HANDLER(decaln) /* DECALN - Screen Alignment Test */
 ENDHANDLER
 
 HANDLER(su) /* SU - Scroll Up/Down */
+    fprintf(fp, "SU\n");
+    fflush(fp);
     wscrl(win, (w == L'T' || w == L'^')? -P1(0) : P1(0));
 ENDHANDLER
 
@@ -326,15 +377,23 @@ HANDLER(tbc) /* TBC - Tabulation Clear */
 ENDHANDLER
 
 HANDLER(cub) /* CUB - Cursor Backward */
+    fprintf(fp, "CUB\n");
+    fflush(fp);
     s->xenl = false;
     wmove(win, py, MAX(x - P1(0), 0));
 ENDHANDLER
 
 HANDLER(el) /* EL - Erase in Line */
     cchar_t b;
+    fprintf(fp, "EL %d\n", P0(0));
+    fflush(fp);
     setcchar(&b, L" ", A_NORMAL, mtm_alloc_pair(s->fg, s->bg), NULL);
     switch (P0(0)){
-        case 0: wclrtoeol(win);                                                 break;
+        case 0:
+            wclrtoeol(win);
+            fartclrtoeol(foo, x, y);
+            maylinkclreol(x, y);
+            break;
         case 1: for (int i = 0; i <= x; i++) mvwadd_wchnstr(win, py, i, &b, 1); break;
         case 2: wmove(win, py, 0); wclrtoeol(win);                              break;
     }
@@ -343,8 +402,16 @@ ENDHANDLER
 
 HANDLER(ed) /* ED - Erase in Display */
     int o = 1;
+    fprintf(fp, "ED %d ^ %d $ %d\n", P0(0), y, LINES);
+    fflush(fp);
     switch (P0(0)){
-        case 0: wclrtobot(win);                     break;
+        case 0:
+            wclrtobot(win);
+            fartclrlines(foo, y + 1, LINES);
+            maylinkclrlines(x, y + 1, LINES);
+            fartclrtoeol(foo, x, y);
+            maylinkclreol(x, y);
+            break;
         case 3: werase(win);                        break;
         case 2: wmove(win, tos, 0); wclrtobot(win); break;
         case 1:
@@ -360,10 +427,16 @@ HANDLER(ed) /* ED - Erase in Display */
 ENDHANDLER
 
 HANDLER(ech) /* ECH - Erase Character */
+    fprintf(fp, "ECH !!!!!!!!!!!!!!!!!!!!!!!! OMG\n");
+    fflush(fp);
     cchar_t c;
     setcchar(&c, L" ", A_NORMAL, mtm_alloc_pair(s->fg, s->bg), NULL);
-    for (int i = 0; i < P1(0); i++)
+    for (int i = 0; i < P1(0); i++) {
         mvwadd_wchnstr(win, py, x + i, &c, 1);
+        if (foo) { fart(foo, x + i, py, L" "); }
+        // finally got it!
+        exit(1);
+    }
     wmove(win, py, px);
 ENDHANDLER
 
@@ -378,6 +451,8 @@ HANDLER(dsr) /* DSR - Device Status Report */
 ENDHANDLER
 
 HANDLER(idl) /* IL or DL - Insert/Delete Line */
+    fprintf(fp, "IL|DL\n");
+    fflush(fp);
     /* we don't use insdelln here because it inserts above and not below,
      * and has a few other edge cases... */
     int otop = 0, obot = 0, p1 = MIN(P1(0), (my - 1) - y);
@@ -389,6 +464,8 @@ HANDLER(idl) /* IL or DL - Insert/Delete Line */
 ENDHANDLER
 
 HANDLER(csr) /* CSR - Change Scrolling Region */
+    fprintf(fp, "CSR\n");
+    fflush(fp);
     if (wsetscrreg(win, tos + P1(0) - 1, tos + PD(1, my) - 1) == OK)
         CALL(cup);
 ENDHANDLER
@@ -407,6 +484,8 @@ ENDHANDLER
 HANDLER(cls) /* Clear screen */
     CALL(cup);
     wclrtobot(win);
+    fartclear(foo);
+    maylinkclearscreen();
     CALL(cup);
 ENDHANDLER
 
@@ -510,6 +589,8 @@ HANDLER(sgr) /* SGR - Select Graphic Rendition */
     }
     if (doc){
         int p = mtm_alloc_pair(s->fg = fg, s->bg = bg);
+        // printf("alloc pair colors: fg: %d, bg: %d\n", fg, bg);
+        glob_bg = bg;
         wcolor_set(win, p, NULL);
         cchar_t c;
         setcchar(&c, L" ", A_NORMAL, p, NULL);
@@ -523,6 +604,10 @@ HANDLER(cr) /* CR - Carriage Return */
 ENDHANDLER
 
 HANDLER(ind) /* IND - Index */
+    if (y == (bot - 1)) {
+      fartscroll(foo);
+      maylinkscroll();
+    }
     y == (bot - 1)? scroll(win) : wmove(win, py + 1, x);
 ENDHANDLER
 
@@ -540,6 +625,152 @@ ENDHANDLER
 
 HANDLER(cnl) /* CNL - Cursor Next Line */
     wmove(win, MIN(tos + bot - 1, py + P1(0)), 0);
+ENDHANDLER
+
+bool fosh = false;
+// NOTE currently limited to 16 purely because of the
+//      implementation of debugfosh (single character hex)
+// these should be malloc'ed
+wchar_t osc8linkbase[16][MAXOSC];
+int osc8linkbaserc[16];
+// FIXME need to store ref counts (pixel count) per link
+//       eventually when they reach 0 they can be "gc"'ed
+int osc8currentlink = -1;
+unsigned char osc8buffer[LINES][COLS];
+
+void foshbegan(wchar_t* osc) {
+  for (int i = 0; i < 16; i++) {
+    if (wcslen(osc8linkbase[i]) == 0) {
+      fprintf(fp, "GOT HOLE FOR %ls -> %d\n", osc, i);
+      osc8currentlink = i;
+      wcsncpy(osc8linkbase[i], osc + 3, MAXOSC-1);
+      // fprintf(fp, "NEW LEN -> %d\n", wcslen(osc8linkbase[i]));
+      // fflush(fp);
+      fosh = true;
+      return;
+    }
+  }
+  fosh = false;
+}
+
+// in completely made up order of difficulty
+const char* possible_entries[] = { "ht", "tn", "ns", "hs", "hn", "uh", "eh", "oh", "oe", "su", "ot", "ua", "ae", "es", "en", "nt" };
+
+wchar_t* fosh_ts[16];
+unsigned char fosh_chs[16];
+unsigned char* fosh_entries[16];
+int fosh_xs[16];
+int fosh_ys[16];
+int fosh_entry_count;
+
+void debugfosh() {
+  int bitmap = 0;
+  int t = 0;
+  // track prevline handle placement to prevent overlap
+  unsigned char prevline[COLS], curline[COLS];
+  for (int y = 0; y < LINES; y++) {
+    for (int x = 0; x < COLS; x++) {
+      unsigned char ch = osc8buffer[y][x];
+      fprintf(fp, (ch == 0xff) ? " " : "%x", ch);
+      if ((ch != 0xff) && (bitmap & (1 << ch)) == 0
+          && prevline[x] == 0) {
+        // skip if curline filled at this position
+        fosh_chs[t] = ch;
+        fosh_ts[t] = osc8linkbase[ch];
+        fosh_xs[t] = x;
+        fosh_ys[t] = y;
+        bitmap |= (1 << ch);
+        fprintf(fp, "\b*");
+        curline[x] = 1;
+        t++;
+        if (t >= 16) {
+          goto foo;
+        }
+      }
+    }
+    memcpy(prevline, curline, COLS*sizeof(unsigned char));
+    memset(curline, 0, COLS*sizeof(unsigned char));
+    fprintf(fp, "\n");
+  }
+  foo:
+  if (t < 8) {
+    // fprintf(fp, "TODO SINGLE CHAR (using double)\n");
+  } else {
+    // FIXME > 2 char codes are not currently implemented
+    //       but as this is easier than gc. we'll probably
+    //       implement this quite soon.
+    // fprintf(fp, "DOUBLE CHAR\n");
+  }
+  for (int i = 0; i < t; i++) {
+    fosh_entries[i] = possible_entries[i];
+    fprintf(fp, "link(%d), %ls, %s [%d, %d]\n",
+            fosh_chs[i], fosh_ts[i], fosh_entries[i],
+            fosh_xs[i], fosh_ys[i]);
+  }
+
+  fflush(fp);
+  fosh_entry_count = t;
+}
+
+void foshdone() {
+  debugfosh();
+  fosh = false;
+}
+
+void maylinkpaint(int x, int y) {
+  if (fosh) {
+    // fprintf(fp, "PAINT %ls %d %d %d\n", osc8linkbase[osc8currentlink], x, y, osc8currentlink);
+    // fflush(fp);
+    osc8buffer[y][x] = osc8currentlink;
+    osc8linkbaserc[osc8currentlink]++;
+  }
+}
+
+void maylinkclreol(int x, int y) {};
+void maylinkclrlines(int x, int y, int y2) {};
+void maylinkscroll() {};
+
+void maylinkclearscreen() {
+  fprintf(fp, "got a screen clear. could reset to avoid gcing\n");
+  memset(osc8buffer, 0xff, LINES*COLS*sizeof(unsigned char));
+}
+
+void possiblygc(x, y) {
+  unsigned char linkidx = osc8buffer[y][x];
+  if (linkidx != 0xff && osc8linkbaserc[linkidx] <= 0) {
+    // FIXME this is far from efficient as this condition
+    //   and as such copy is hit multiple times a frame.
+    fprintf(fp, "GCing!\n");
+    wcscpy(osc8linkbase[linkidx], L"");
+    osc8linkbaserc[linkidx] = 0;
+  }
+}
+
+// clear always clears, should rename
+void maylinkclear(int x, int y) {
+  // fprintf(fp, "CLEAR [%d, %d]\n", x, y);
+  unsigned char linkidx = osc8buffer[y][x];
+  if (linkidx != 0xff) {
+    osc8linkbaserc[linkidx]--;
+    possiblygc(x, y);
+    osc8buffer[y][x] = 0xff;
+  }
+}
+
+HANDLER(osc) /* OSC - Operating System Command */
+  fprintf(fp, "OSC %ls\n", osc);
+  fflush(fp);
+  if (wcslen(osc) >= 3 && osc[0] == L'8' && osc[1] == L';') {
+    bool _fosh = wcslen(osc) > 3;
+    fflush(fp);
+    if (_fosh) {
+      foshbegan(osc);
+      fprintf(fp, "OSC8 BEGAN ->\n");
+    } else {
+      foshdone();
+      fprintf(fp, "OSC8 DONE!\n");
+    }
+  }
 ENDHANDLER
 
 HANDLER(print) /* Print a character to the terminal */
@@ -564,8 +795,15 @@ HANDLER(print) /* Print a character to the terminal */
     if (x == mx - wcwidth(w)){
         s->xenl = true;
         wins_nwstr(win, &w, 1);
-    } else
+        maylinkclear(x, y); // always clears
+        maylinkpaint(x, y);
+        if (foo) { fart(foo, x, y, w, glob_bg); }
+    } else {
         waddnwstr(win, &w, 1);
+        maylinkclear(x, y); // always clears
+        maylinkpaint(x, y);
+        if (foo) { fart(foo, x, y, w, glob_bg); }
+    }
     n->gc = n->gs;
 } /* no ENDHANDLER because we don't want to reset repc */
 
@@ -677,6 +915,7 @@ setupevents(NODE *n)
     vtonevent(&n->vp, VTPARSER_ESCAPE,  L'=', numkp);
     vtonevent(&n->vp, VTPARSER_ESCAPE,  L'>', numkp);
     vtonevent(&n->vp, VTPARSER_PRINT,   0,    print);
+    vtonevent(&n->vp, VTPARSER_OSC,     0,    osc);
 }
 
 /*** MTM FUNCTIONS
@@ -707,8 +946,8 @@ newnode(Node t, NODE *p, int y, int x, int h, int w) /* Create a new node. */
     n->p = p;
     n->y = y;
     n->x = x;
-    n->h = h;
-    n->w = w;
+    n->h = LINES;
+    n->w = COLS;
     n->tabs = tabs;
     n->ntabs = w;
 
@@ -762,7 +1001,7 @@ getterm(void)
 }
 
 static NODE *
-newview(NODE *p, int y, int x, int h, int w) /* Open a new view. */
+newview(NODE *p, int y, int x, int h, int w, bool jeo) /* Open a new view. */
 {
     struct winsize ws = {.ws_row = h, .ws_col = w};
     NODE *n = newnode(VIEW, p, y, x, h, w);
@@ -795,8 +1034,13 @@ newview(NODE *p, int y, int x, int h, int w) /* Open a new view. */
         setsid();
         setenv("MTM", buf, 1);
         setenv("TERM", getterm(), 1);
+        prctl(PR_SET_PDEATHSIG, SIGTERM);
         signal(SIGCHLD, SIG_DFL);
-        execl(getshell(), getshell(), NULL);
+        if (jeo) {
+          execl("/usr/local/bin/xonsh", "/usr/local/bin/xonsh", "-i", "-c", "xmp", NULL);
+        } else {
+          execl("/usr/local/bin/xonsh", "/usr/local/bin/xonsh", NULL);
+        }
         return NULL;
     }
 
@@ -818,11 +1062,11 @@ newcontainer(Node t, NODE *p, int y, int x, int h, int w,
     n->c2 = c2;
     c1->p = c2->p = n;
 
-    reshapechildren(n);
+    // reshapechildren(n);
     return n;
 }
 
-static void
+void
 focus(NODE *n) /* Focus a node. */
 {
     if (!n)
@@ -860,14 +1104,14 @@ replacechild(NODE *n, NODE *c1, NODE *c2) /* Replace c1 of n with c2. */
     c2->p = n;
     if (!n){
         root = c2;
-        reshape(c2, 0, 0, LINES, COLS);
+        // reshape(c2, 0, 0, LINES, COLS);
     } else if (n->c1 == c1)
         n->c1 = c2;
     else if (n->c2 == c1)
         n->c2 = c2;
 
     n = n? n : root;
-    reshape(n, n->y, n->x, n->h, n->w);
+    // reshape(n, n->y, n->x, n->h, n->w);
     draw(n);
 }
 
@@ -942,8 +1186,8 @@ reshape(NODE *n, int y, int x, int h, int w) /* Reshape a node. */
     int ow = n->w;
     n->y = y;
     n->x = x;
-    n->h = MAX(h, 1);
-    n->w = MAX(w, 1);
+    // n->h = MAX(h, 1);
+    // n->w = MAX(w, 1);
 
     if (n->t == VIEW)
         reshapeview(n, d, ow);
@@ -978,9 +1222,10 @@ static void
 split(NODE *n, Node t) /* Split a node. */
 {
     int nh = t == VERTICAL? (n->h - 1) / 2 : n->h;
-    int nw = t == HORIZONTAL? (n->w) / 2 : n->w;
+    int nw = n->w; // AK no override here as HORIZONTAL is
+                   //   (currently) a marker for our overlay
     NODE *p = n->p;
-    NODE *v = newview(NULL, 0, 0, MAX(0, nh), MAX(0, nw));
+    NODE *v = newview(NULL, 0, 0, LINES, COLS, true);
     if (!v)
         return;
 
@@ -1008,8 +1253,16 @@ getinput(NODE *n, fd_set *f) /* Recursively check all ptty's for input. */
         ssize_t r = read(n->pt, iobuf, sizeof(iobuf));
         if (r > 0)
             vtwrite(&n->vp, iobuf, r);
-        if (r <= 0 && errno != EINTR && errno != EWOULDBLOCK)
+        if (r <= 0 && errno != EINTR && errno != EWOULDBLOCK) {
+          if (n == root->c1) {
+            fprintf(fp, "primary window exit. quitting\n");
+            fflush(fp);
+            quit(EXIT_SUCCESS, NULL);
+          } else {
+            fprintf(fp, "secondary window exit. ignoring\n");
             return deletenode(n), false;
+          }
+        }
     }
 
     return true;
@@ -1033,7 +1286,7 @@ scrollbottom(NODE *n)
     n->s->off = n->s->tos;
 }
 
-static void
+void
 sendarrow(const NODE *n, const char *k)
 {
     char buf[100] = {0};
@@ -1110,13 +1363,17 @@ handlechar(int r, int k) /* Handle a single input character. */
     return cmd = false, true;
 }
 
-static void
-run(void) /* Run MTM. */
+void
+run(void *p, void *p0, void *p1) /* Run MTM. */
 {
-    while (root){
+        foos[0] = p0; // virtual 0
+        foos[1] = p1; // virtual 1
+        foop = p;     // served
+
         wint_t w = 0;
         fd_set sfds = fds;
-        if (select(nfds + 1, &sfds, NULL, NULL, NULL) < 0)
+        struct timeval tv = {0, 10000};
+        if (select(nfds + 1, &sfds, NULL, NULL, &tv) < 0)
             FD_ZERO(&sfds);
 
         int r = wget_wch(focused->s->win, &w);
@@ -1129,15 +1386,19 @@ run(void) /* Run MTM. */
         fixcursor();
         draw(focused);
         doupdate();
-    }
 }
 
 int
-main(int argc, char **argv)
+main2(int argc, char **argv)
 {
     FD_SET(STDIN_FILENO, &fds);
     setlocale(LC_ALL, "");
     signal(SIGCHLD, SIG_IGN); /* automatically reap children */
+
+    memset(osc8buffer, 0xff, LINES*COLS*sizeof(unsigned char));
+    for (int i = 0; i < 16; i++) {
+      wcscpy(osc8linkbase[i], L"");
+    }
 
     int c = 0;
     while ((c = getopt(argc, argv, "c:T:t:")) != -1) switch (c){
@@ -1157,13 +1418,14 @@ main(int argc, char **argv)
     use_default_colors();
     start_pairs();
 
-    root = newview(NULL, 0, 0, LINES, COLS);
+    root = newview(NULL, 0, 0, LINES, COLS, false);
     if (!root)
         quit(EXIT_FAILURE, "could not open root window");
-    focus(root);
-    draw(root);
-    run();
 
-    quit(EXIT_SUCCESS, NULL);
-    return EXIT_SUCCESS; /* not reached */
+    // focus(root);
+    // draw(root);
+    split(root, HORIZONTAL);
+    scrns[0] = root->c1;
+    scrns[1] = root->c2;
+    focus(root->c1);
 }

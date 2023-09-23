@@ -45,7 +45,7 @@ struct STATE{
 
 /**** GLOBALS */
 static STATE ground, escape, escape_intermediate, csi_entry,
-             csi_ignore, csi_param, csi_intermediate, osc_string;
+  csi_ignore, csi_param, csi_intermediate, osc_string, osc_string_end;
 
 /**** ACTION FUNCTIONS */
 static void
@@ -68,11 +68,16 @@ collect(VTPARSER *v, wchar_t w)
     v->inter = v->inter? v->inter : (int)w;
 }
 
+extern FILE* fp;
+
 static void
 collectosc(VTPARSER *v, wchar_t w)
 {
-    if (v->nosc < MAXOSC)
+    if (v->nosc < MAXOSC) {
+        // fprintf(fp, "OSC char: %c, %d\n", (char)w, v->nosc);
+        // fflush(fp);
         v->oscbuf[v->nosc++] = w;
+    }
 }
 
 static void
@@ -170,7 +175,6 @@ vtwrite(VTPARSER *vp, const char *s, size_t n)
             {0x7f, 0x7f, ignore,    NULL},    \
             {0x18, 0x18, docontrol, &ground}, \
             {0x1a, 0x1a, docontrol, &ground}, \
-            {0x1b, 0x1b, ignore,    &escape}, \
             {0x01, 0x06, docontrol, NULL},    \
             {0x08, 0x17, docontrol, NULL},    \
             {0x19, 0x19, docontrol, NULL},    \
@@ -182,10 +186,12 @@ vtwrite(VTPARSER *vp, const char *s, size_t n)
     }
 
 MAKESTATE(ground, NULL,
+    {0x1b, 0x1b, ignore,    &escape},
     {0x20, WCHAR_MAX, doprint, NULL}
 );
 
 MAKESTATE(escape, reset,
+          {0x1b, 0x1b, ignore,    &escape},
     {0x21, 0x21, ignore,   &osc_string},
     {0x20, 0x2f, collect,  &escape_intermediate},
     {0x30, 0x4f, doescape, &ground},
@@ -203,11 +209,13 @@ MAKESTATE(escape, reset,
 );
 
 MAKESTATE(escape_intermediate, NULL,
+          {0x1b, 0x1b, ignore,    &escape},
     {0x20, 0x2f, collect,  NULL},
     {0x30, 0x7e, doescape, &ground}
 );
 
 MAKESTATE(csi_entry, reset,
+          {0x1b, 0x1b, ignore,    &escape},
     {0x20, 0x2f, collect, &csi_intermediate},
     {0x3a, 0x3a, ignore,  &csi_ignore},
     {0x30, 0x39, param,   &csi_param},
@@ -217,11 +225,13 @@ MAKESTATE(csi_entry, reset,
 );
 
 MAKESTATE(csi_ignore, NULL,
+          {0x1b, 0x1b, ignore,    &escape},
     {0x20, 0x3f, ignore, NULL},
     {0x40, 0x7e, ignore, &ground}
 );
 
 MAKESTATE(csi_param, NULL,
+          {0x1b, 0x1b, ignore,    &escape},
     {0x30, 0x39, param,   NULL},
     {0x3b, 0x3b, param,   NULL},
     {0x3a, 0x3a, ignore,  &csi_ignore},
@@ -231,12 +241,18 @@ MAKESTATE(csi_param, NULL,
 );
 
 MAKESTATE(csi_intermediate, NULL,
+          {0x1b, 0x1b, ignore,    &escape},
     {0x20, 0x2f, collect, NULL},
     {0x30, 0x3f, ignore,  &csi_ignore},
     {0x40, 0x7e, docsi,   &ground}
 );
 
+MAKESTATE(osc_string_end, NULL,
+    {0x5C, 0x5C, doosc, &ground}
+);
+
 MAKESTATE(osc_string, reset,
+    {0x1B, 0x1B, ignore, &osc_string_end},
     {0x07, 0x07, doosc, &ground},
     {0x20, 0x7f, collectosc, NULL}
 );

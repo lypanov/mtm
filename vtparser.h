@@ -45,7 +45,7 @@
 /**** DATA TYPES */
 #define MAXPARAM    16
 #define MAXCALLBACK 128
-#define MAXOSC      100
+#define MAXOSC      4096
 #define MAXBUF      100
 
 typedef struct VTPARSER VTPARSER;
