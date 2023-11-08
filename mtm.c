@@ -49,7 +49,7 @@ blinkificate
   blinknew = blink
 */
 
-#define LINES 42
+#define LINES 40
 #define COLS 56
 
 #define MIN(x, y) ((x) < (y)? (x) : (y))
