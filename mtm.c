@@ -226,6 +226,7 @@ HANDLER(vis) /* Cursor visibility */
 ENDHANDLER
 
 HANDLER(cup) /* CUP - Cursor Position */
+    fprintf(fp, "CUP\n");
     s->xenl = false;
     wmove(win, tos + (n->decom? top : 0) + P1(0) - 1, P1(1) - 1);
 ENDHANDLER
@@ -238,6 +239,7 @@ HANDLER(dch) /* DCH - Delete Character */
 ENDHANDLER
 
 HANDLER(ich) /* ICH - Insert Character */
+    fprintf(fp, "ICH\n");
     for (int i = 0; i < P1(0); i++)
         wins_nwstr(win, L" ", 1);
 ENDHANDLER
@@ -270,6 +272,7 @@ HANDLER(hts) /* HTS - Horizontal Tab Set */
 ENDHANDLER
 
 HANDLER(ri) /* RI - Reverse Index */
+    fprintf(fp, "RI\n");
     int otop = 0, obot = 0;
     wgetscrreg(win, &otop, &obot);
     wsetscrreg(win, otop >= tos? otop : tos, obot);
@@ -488,6 +491,7 @@ HANDLER(sgr0) /* Reset SGR to default */
 ENDHANDLER
 
 HANDLER(cls) /* Clear screen */
+    fprintf(fp, "CLS\n");
     CALL(cup);
     wclrtobot(win);
     fartclear(foo);
@@ -605,6 +609,7 @@ HANDLER(sgr) /* SGR - Select Graphic Rendition */
 }
 
 HANDLER(cr) /* CR - Carriage Return */
+    fprintf(fp, "CR\n");
     s->xenl = false;
     wmove(win, py, 0);
 ENDHANDLER
@@ -628,10 +633,12 @@ HANDLER(pnl) /* NL - Newline */
 ENDHANDLER
 
 HANDLER(cpl) /* CPL - Cursor Previous Line */
+    fprintf(fp, "CPL\n");
     wmove(win, MAX(tos + top, py - P1(0)), 0);
 ENDHANDLER
 
 HANDLER(cnl) /* CNL - Cursor Next Line */
+    fprintf(fp, "CNL\n");
     wmove(win, MIN(tos + bot - 1, py + P1(0)), 0);
 ENDHANDLER
 
