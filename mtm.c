@@ -93,6 +93,9 @@ static int commandkey = CTL(COMMAND_KEY), nfds = 1; /* stdin */
 static fd_set fds;
 static char iobuf[BUFSIZ];
 
+static int region_start = 0;
+static int region_end = 0;
+
 void* foos[8];
 void* foop;
 static short glob_bg = 0;
@@ -464,8 +467,11 @@ HANDLER(idl) /* IL or DL - Insert/Delete Line */
 ENDHANDLER
 
 HANDLER(csr) /* CSR - Change Scrolling Region */
-    fprintf(fp, "CSR\n");
+// 13 : 38 -> broken
+    fprintf(fp, "CSR %d , %d\n", P1(0), P0(1));
     fflush(fp);
+    region_start = P1(0);
+    region_end = P0(1);
     if (wsetscrreg(win, tos + P1(0) - 1, tos + PD(1, my) - 1) == OK)
         CALL(cup);
 ENDHANDLER
@@ -604,7 +610,9 @@ HANDLER(cr) /* CR - Carriage Return */
 ENDHANDLER
 
 HANDLER(ind) /* IND - Index */
-    if (y == (bot - 1)) {
+    fprintf(fp, "IND\n");
+    // scroll, but ignore weird newsboat requests
+    if (y == (bot - 1) && region_start < 10) {
       fartscroll(foo);
       maylinkscroll();
     }
