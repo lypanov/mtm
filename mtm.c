@@ -99,6 +99,7 @@ static int region_end = 0;
 void* foos[8];
 void* foop;
 static short glob_bg = 0;
+static short glob_fg = 0;
 extern FILE *fp;
 
 static void setupevents(NODE *n);
@@ -606,6 +607,7 @@ HANDLER(sgr) /* SGR - Select Graphic Rendition */
         int p = mtm_alloc_pair(s->fg = fg, s->bg = bg);
         // printf("alloc pair colors: fg: %d, bg: %d\n", fg, bg);
         glob_bg = bg;
+        glob_fg = fg;
         wcolor_set(win, p, NULL);
         cchar_t c;
         setcchar(&c, L" ", A_NORMAL, p, NULL);
@@ -817,12 +819,12 @@ HANDLER(print) /* Print a character to the terminal */
         wins_nwstr(win, &w, 1);
         maylinkclear(x, y); // always clears
         maylinkpaint(x, y);
-        if (foo) { fart(foo, x, y, w, glob_bg); }
+        if (foo) { fart(foo, x, y, w, glob_bg, glob_fg); }
     } else {
         waddnwstr(win, &w, 1);
         maylinkclear(x, y); // always clears
         maylinkpaint(x, y);
-        if (foo) { fart(foo, x, y, w, glob_bg); }
+        if (foo) { fart(foo, x, y, w, glob_bg, glob_fg); }
     }
     n->gc = n->gs;
 } /* no ENDHANDLER because we don't want to reset repc */
