@@ -400,8 +400,13 @@ HANDLER(el) /* EL - Erase in Line */
             fartclrtoeol(foo, x, y);
             maylinkclreol(x, y);
             break;
-        case 1: for (int i = 0; i <= x; i++) mvwadd_wchnstr(win, py, i, &b, 1); break;
-        case 2: wmove(win, py, 0); wclrtoeol(win);                              break;
+        case 1:
+            for (int i = 0; i <= x; i++) {
+              mvwadd_wchnstr(win, py, i, &b, 1);
+            }
+            fartclrtostartofline(foo, x, y);
+            break;
+        case 2: wmove(win, py, 0); wclrtoeol(win);                            break;
     }
     wmove(win, py, x);
 ENDHANDLER
