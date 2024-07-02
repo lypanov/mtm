@@ -49,8 +49,8 @@ blinkificate
   blinknew = blink
 */
 
-#define LINES 40
-#define COLS 56
+#define LINES 53
+#define COLS 75
 
 #define MIN(x, y) ((x) < (y)? (x) : (y))
 #define MAX(x, y) ((x) > (y)? (x) : (y))
@@ -216,6 +216,7 @@ getshell(void) /* Get the user's preferred shell. */
 
 HANDLER(bell) /* Terminal bell. */
     beep();
+    fartbeep(foo);
 ENDHANDLER
 
 HANDLER(numkp) /* Application/Numeric Keypad Mode */
